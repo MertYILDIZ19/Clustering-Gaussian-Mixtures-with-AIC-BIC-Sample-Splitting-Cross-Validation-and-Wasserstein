@@ -1,0 +1,652 @@
+---
+title: "Stat4DS / Homework 02"
+output:
+    prettydoc::html_pretty:
+    highlight: github
+    theme: cayman
+---
+---
+subtitle: "Whack a MoG"
+output:
+  html_document:
+    df_print: paged
+---
+
+Mert YILDIZ
+Dilara IŞIKLI
+
+```{r}
+
+library(caret)
+library(caTools)
+require(caTools) 
+
+library(LaplacesDemon)
+library(transport)
+
+```
+
+Bart Normmixture Generation Function
+```{r}
+
+# Bart --------------------------------------------------------------------
+
+suppressMessages(require(mixtools, quietly = T)) # Package and function
+
+bart_func <- function(n){
+  
+  XX <- rnormmix(n,
+                 lambda = c(0.5, rep(0.1,5)), 
+                 mu     = c(0, ((0:4)/2)-1), 
+                 sigma  = c(1, rep(0.1,5)))
+  
+  return(XX)
+}
+
+```
+
+```
+We have used the bart_func for the rest homework
+
+```
+
+Normmixture Generation with n1 < n2
+
+```{r}
+
+# Different sample size n1 and n2 -----------------------------------------
+
+n1 = 500
+XX_n1 = bart_func(n1)
+
+# Make an histogram of the data
+hist(XX_n1, prob = T, col = gray(.8), border = NA,
+     main = paste("Data from Bart's density",sep=""),
+     xlab = paste("n = ", n1, sep = ""),
+     breaks = 50)
+
+# Show the data points
+rug(XX_n1, col = rgb(0,0,0,.5))
+
+# Plot the true density
+true.den = function(x) 0.5*dnorm(x, 0, 1) +
+  0.1*dnorm(x,-1.0, 0.1) + 0.1*dnorm(x, -0.5, 0.1) +
+  0.1*dnorm(x, 0.0, 0.1) + 0.1*dnorm(x, 0.5, 0.1) +
+  0.1*dnorm(x, 1.0, 0.1)
+
+curve(true.den, col = rgb(1,0,0,0.4), lwd = 3, n = 500, add = TRUE)
+
+
+n2 = 2500
+XX_n2 = bart_func(n2)
+
+# Make an histogram of the data
+hist(XX_n2, prob = T, col = gray(.8), border = NA,
+     main = paste("Data from Bart's density",sep=""),
+     xlab = paste("n = ", n2, sep = ""),
+     breaks = 50)
+
+# Show the data points
+rug(XX_n2, col = rgb(0,0,0,.5))
+
+# Plot the true density
+true.den = function(x) 0.5*dnorm(x, 0, 1) +
+  0.1*dnorm(x,-1.0, 0.1) + 0.1*dnorm(x, -0.5, 0.1) +
+  0.1*dnorm(x, 0.0, 0.1) + 0.1*dnorm(x, 0.5, 0.1) +
+  0.1*dnorm(x, 1.0, 0.1)
+
+curve(true.den, col = rgb(1,0,0,0.4), lwd = 3, n = 500, add = TRUE)
+
+
+```
+
+```
+As it is seen above we have chose n1 = 500 to probe a non-asymptotic regime and a large n2 = 2500 to probe a reasonably asymptotic regime. We chose the sample sizes according to the results we got from next questions to have good visualization we decided that n1 and n2 are making good visualization like this for next sections.
+
+```
+
+Dynamic Handmade-EM Function
+```{r}
+
+# Handmade-EM -------------------------------------------------------------
+
+handmade.em <- function(y, k, p, mu, sigma, n_iter)
+{
+  
+  like     <- p[1]*dnorm(y, mu[1], sigma[1])
+  for (i in 2:k) {
+    like = like + p[i]*dnorm(y, mu[i], sigma[i])
+  }
+  
+  deviance <- -2*sum(log(like))
+  res      <- matrix(NA,n_iter + 1, 3*k + 2)
+  res[1,]  <- c(0, p, mu, sigma, deviance)
+  for (iter in 1:n_iter) {
+    # E step
+    d_tot = rep(0, k)
+    d <- list()
+    for (i in 1:k) {
+      d[[i]] = p[i]*dnorm(y, mu[i], sigma[i])
+      d_tot = d_tot + d[[i]]
+    }
+    
+    for (j in 1:k) {
+      r = d[[j]]/d_tot
+      p[j]     <- mean(r)
+      ax = sum((r*y))
+      bx = sum((r))
+      mu[j]    <- ax/bx
+      sigma[j] <-sqrt(sum(r*(y^2))/sum(r) - (mu[j])^2)
+    }
+    
+    
+    # -2 x log-likelihood (a.k.a. deviance)
+    
+    p = p/sum(p)
+    like     <- p[1]*dnorm(y, mu[1], sigma[1])
+    for (i in 2:k) {
+      like = like + p[i]*dnorm(y, mu[i], sigma[i])
+    }
+    deviance <- -2*sum( log(like) )
+    
+    # Save
+    res[iter+1,] <- c(iter, p, mu, sigma, deviance)
+    
+  }
+  res <- data.frame(res)
+  out <- list(parameters = c(p = p, mu = mu, sigma = sigma), deviance = deviance, res = res)
+  return(out)
+}
+
+
+```
+
+
+```
+The handmade.EM function is dynamic now that we can use it for next sections.
+
+```
+
+Model Selection Simulation with AIC and BIC
+```{r, warning = FALSE}
+
+# Simulation With AIC and BIC ---------------------------------------------
+
+simulation_func <- function(XX, k_max , M){
+  
+  dev_count <- c(0,0,0,0,0)
+  dev_tot <- c(0,0,0,0,0)
+  for (i in 1:M) {
+    
+    dev_arr <- c(0,0,0,0,0)
+    for (i in 2:k_max) {
+      
+      k = i
+      p <- c()
+      mu <- c()
+      sigma <- c()
+      
+      for(j in 1:k){
+        
+        p_i = 1/k
+        p <- append(p,p_i)
+        
+        avg_mu <- mean(XX)
+        num_mu <- runif(1, avg_mu-1, avg_mu+1)
+        mu <- append(mu,num_mu)
+        
+        a_sig = min(XX)/2
+        b_sig = max(XX)/2
+        num_sig <- runif(1, 0.0000001, abs(b_sig-a_sig))
+        sigma <- append(sigma,num_sig)
+      }
+      
+      hem_fit <- handmade.em(XX,
+                             k,
+                             p,
+                             mu,
+                             sigma,
+                             n_iter = 50)
+      deviance <- hem_fit$deviance
+      
+      if (is.na(deviance) | deviance == 0){
+        
+        deviance  = 0
+        dev_arr[i-1] = deviance
+      }
+      else {
+        
+        dev_count[i-1] = dev_count[i-1] +1
+        dev_arr[i-1] = deviance
+      }
+      
+    }
+    dev_tot = dev_tot + dev_arr
+  }
+  dev_avg = dev_tot/dev_count
+  
+  return(dev_avg)
+}
+
+
+n1 = 500
+n2 = 2500
+M = 10
+k_max = 6
+
+XX_n1 <- bart_func(n1)
+XX_n2 <- bart_func(n2)
+avg_dev_n1 <- simulation_func(XX_n1, k_max, M)
+avg_dev_n2 <- simulation_func(XX_n2, k_max, M)
+
+avg_dev_n1
+avg_dev_n2
+
+
+AIC_arr_n1 <- c()
+BIC_arr_n1 <- c()
+
+AIC_arr_n2 <- c()
+BIC_arr_n2 <- c()
+
+for (i in 1:k_max-1) {
+  
+  
+  k = i + 1
+  num_par = 3
+  AIC_score = avg_dev_n1[i] + 2*num_par
+  AIC_arr_n1 <- append(AIC_arr_n1,AIC_score)
+  
+  AIC_score = avg_dev_n2[i] + 2*num_par
+  AIC_arr_n2 <- append(AIC_arr_n2,AIC_score)
+  
+  
+  BIC_score = avg_dev_n1[i] + num_par*log(n1)
+  BIC_arr_n1 <- append(BIC_arr_n1,BIC_score)
+  
+  BIC_score = avg_dev_n2[i] + num_par*log(n2)
+  BIC_arr_n2 <- append(BIC_arr_n2,BIC_score)
+  
+}
+
+cat ("The AIC scores for n1:", AIC_arr_n1)
+AIC_true_k1 = which(AIC_arr_n1==min(AIC_arr_n1)) + 1
+cat ("The best k choosen according AIC scores for n1:", AIC_true_k1)
+
+cat ("The AIC scores for n2:", AIC_arr_n2)
+AIC_true_k2 = which(AIC_arr_n2==min(AIC_arr_n2)) + 1
+cat ("The best k choosen according AIC scores for n2:", AIC_true_k2)
+
+cat ("The BIC scores for n1:", BIC_arr_n1)
+BIC_true_k1 = which(BIC_arr_n1==min(BIC_arr_n1)) + 1
+cat ("The best k choosen according BIC scores for n1:", BIC_true_k1)
+
+cat ("The BIC scores for n2:", BIC_arr_n2)
+BIC_true_k2 = which(BIC_arr_n2==min(BIC_arr_n2)) + 1
+cat ("The best k choosen according AIC scores for n2:", BIC_true_k2)
+
+
+
+
+```
+
+```
+In AIC and BIC model selection we have run M simulation for k > 1 and we returned the average deviance array of M simulations and we have calculated the AIC and BIC score for each k then we select the best k for minimum AIC and BIC scores. As it is shown above we got the best k = k_max for AIC and BIC model selection for larger sample size n2 but for some simulations size and the number of iteration we have tried that is not shown here sometimes we got k close to k_max for smaller sapmle size n1 which makes sense.
+
+```
+
+Sample Splitting Model Selection Simulation
+```{r, warning = FALSE}
+
+# Sample Splitting for 30% , 50%, and 70% ---------------------------------
+
+sim_func_ss <- function(n, k_max , M, ratio){
+  
+  dev_count <- c(0,0,0,0,0)
+  dev_tot <- c(0,0,0,0,0)
+  for (i in 1:M) {
+    
+    XX <- bart_func(n)
+    sample = sample.split(XX,SplitRatio = ratio) # splits the data in the ratio mentioned in SplitRatio. After splitting marks these rows as logical TRUE and the the remaining are marked as logical FALSE
+    train =subset(XX,sample ==TRUE) # creates a training dataset named train1 with rows which are marked as TRUE
+    test=subset(XX, sample==FALSE)
+    
+    dev_arr <- c(0,0,0,0,0)
+    for (i in 2:k_max) {
+      
+      k = i
+      p <- c()
+      mu <- c()
+      sigma <- c()
+      
+      for(j in 1:k){
+        
+        p_i = 1/k
+        p <- append(p,p_i)
+        
+        avg_mu <- mean(train)
+        num_mu <- runif(1, avg_mu-1, avg_mu+1)
+        mu <- append(mu,num_mu)
+        
+        a_sig = min(train)/2
+        b_sig = max(train)/2
+        num_sig <- runif(1, 0.0000001, abs(b_sig-a_sig))
+        sigma <- append(sigma,num_sig)
+      }
+      
+      hem_fit <- handmade.em(train,
+                             k,
+                             p,
+                             mu,
+                             sigma,
+                             n_iter = 50)
+      tr_param = round( hem_fit$parameters, 3 )
+      
+      for (i in 1:k) {
+        
+        p[i] = tr_param[i]
+        mu[i] = tr_param[k + i]
+        sigma[i] = tr_param[2*k + i]
+        
+      }
+      
+      like     <- p[1]*dnorm(test, mu[1], sigma[1])
+      for (i in 2:k) {
+        like = like + p[i]*dnorm(test, mu[i], sigma[i])
+      }
+      deviance <- -2*sum(log(like))
+      
+      if (is.na(deviance) | deviance == 0){
+        
+        deviance  = 0
+        dev_arr[i-1] = deviance
+      }
+      else {
+        
+        dev_count[i-1] = dev_count[i-1] +1
+        dev_arr[i-1] = deviance
+      }
+      
+    }
+    dev_tot = dev_tot + dev_arr
+  }
+  dev_avg = dev_tot/dev_count
+  
+  return(dev_avg)
+}
+
+# Sample splitting with 30% 
+
+ss_dev_n1_thirty <- sim_func_ss(n1,k_max,M,0.30)
+cat ("The deviances for 30% split and n1:", ss_dev_n1_thirty)
+ss_dev_n1_thirty_k = which(ss_dev_n1_thirty==min(ss_dev_n1_thirty)) + 1
+cat ("The best k choosen according 30% splitting and n1:", ss_dev_n1_thirty_k)
+
+ss_dev_n2_thirty <- sim_func_ss(n2,k_max,M,0.30)
+cat ("The deviances for 30% split and n2:", ss_dev_n2_thirty)
+ss_dev_n2_thirty_k = which(ss_dev_n2_thirty==min(ss_dev_n2_thirty)) + 1
+cat ("The best k choosen according 30% splitting and n2:", ss_dev_n2_thirty_k)
+
+
+# Sample splitting with 50% 
+
+ss_dev_n1_fifty <- sim_func_ss(n1,k_max,M,0.50)
+cat ("The deviances for 50% split and n1:", ss_dev_n1_fifty)
+ss_dev_n1_fifty_k = which(ss_dev_n1_fifty==min(ss_dev_n1_fifty)) + 1
+cat ("The best k choosen according 50% splitting and n1:", ss_dev_n1_fifty_k)
+
+ss_dev_n2_fifty <- sim_func_ss(n2,k_max,M,0.50)
+cat ("The deviances for 50% split and n2:", ss_dev_n2_fifty)
+ss_dev_n2_fifty_k = which(ss_dev_n2_fifty==min(ss_dev_n2_fifty)) + 1
+cat ("The best k choosen according 50% splitting and n2:", ss_dev_n2_fifty_k)
+
+
+# Sample splitting with 70% 
+
+ss_dev_n1_seventy <- sim_func_ss(n1,k_max,M,0.70)
+cat ("The deviances for 70% split and n1:", ss_dev_n1_seventy)
+ss_dev_n1_seventy_k = which(ss_dev_n1_seventy==min(ss_dev_n1_seventy)) + 1
+cat ("The best k choosen according 70% splitting and n1:", ss_dev_n1_seventy_k)
+
+ss_dev_n2_seventy <- sim_func_ss(n2,k_max,M,0.70)
+cat ("The deviances for 70% split and n2:", ss_dev_n2_seventy)
+ss_dev_n2_seventy_k = which(ss_dev_n2_seventy==min(ss_dev_n2_seventy)) + 1
+cat ("The best k choosen according 70% splitting and n1:", ss_dev_n2_seventy_k)
+
+
+
+
+```
+
+```
+In sample splitting model selection we have generated the bart data M times and we have splitted the data into train and test part for 30%, 50%, and 70%. We have run the handmade.em with train data then we took the optimized parameters of the train data and we have calculated the deviance with those parameters and with test data. Then we have returned the average deviance for M simulations and we chose the best k that has minimum average deviance. As it is shown above we got the best k = k_max for most of the model selection simulations for larger sample size n2 but for some simulations size and the number of iteration we have tried that is not shown here sometimes we got k close to k_max for smaller sapmle size n1 which makes sense.
+
+```
+
+```{r, warning = FALSE}
+
+# Cross-Validation --------------------------------------------------------
+
+sim_func_CV <- function(n, M, k_max, k_fold){
+  
+  dev_count <- c(0,0,0,0,0)
+  dev_tot <- c(0,0,0,0,0)
+  for (i in 1:M) {
+    
+    XX <- bart_func(n)
+    folds = createFolds(y=XX, k_fold) # split the indices of data
+    
+    for (i in 1:k_fold){
+      
+      test <- folds[i]
+      test = array(as.numeric(unlist(test)))
+      XX_test = XX[test]
+      
+      train <- folds
+      train[i] <- NULL
+      train = array(as.numeric(unlist(train)))
+      XX_train = XX[train]
+      
+      dev_arr <- c(0,0,0,0,0)
+      for (i in 2:k_max) {
+        
+        k = i
+        p <- c()
+        mu <- c()
+        sigma <- c()
+        
+        for(j in 1:k){
+          
+          p_i = 1/k
+          p <- append(p,p_i)
+          
+          avg_mu <- mean(XX_train)
+          num_mu <- runif(1, avg_mu-1, avg_mu+1)
+          mu <- append(mu,num_mu)
+          
+          a_sig = min(XX_train)/2
+          b_sig = max(XX_train)/2
+          num_sig <- runif(1, 0.0000001, abs(b_sig-a_sig))
+          sigma <- append(sigma,num_sig)
+        }
+        
+        hem_fit <- handmade.em(XX_train,
+                               k,
+                               p,
+                               mu,
+                               sigma,
+                               n_iter = 50)
+        tr_param = round( hem_fit$parameters, 3 )
+        
+        for (i in 1:k) {
+          
+          p[i] = tr_param[i]
+          mu[i] = tr_param[k + i]
+          sigma[i] = tr_param[2*k + i]
+          
+        }
+        
+        like     <- p[1]*dnorm(XX_test, mu[1], sigma[1])
+        for (i in 2:k) {
+          like = like + p[i]*dnorm(XX_test, mu[i], sigma[i])
+        }
+        deviance <- -2*sum(log(like))
+        
+        if (is.na(deviance) | deviance == 0){
+          
+          deviance  = 0
+          dev_arr[i-1] = deviance
+        }
+        else {
+          
+          dev_count[i-1] = dev_count[i-1] +1
+          dev_arr[i-1] = deviance
+        }
+        
+      }
+      dev_tot = dev_tot + dev_arr
+    }
+    
+  }
+  dev_avg = dev_tot/dev_count
+  
+  return(dev_avg)
+  
+}
+
+
+# 5-folds selection model
+
+CV_dev_five_n1 <- sim_func_CV(n1,M,k_max,5)
+cat ("The deviances for 5-folds and n1:", CV_dev_five_n1)
+CV_five_n1_k = which(CV_dev_five_n1==min(CV_dev_five_n1)) + 1
+cat ("The best k choosen according 5-folds and n1:", CV_five_n1_k)
+ 
+CV_dev_five_n2 <- sim_func_CV(n2,M,k_max,5)  
+cat ("The deviances for 5-folds and n2:", CV_dev_five_n2)
+CV_five_n2_k = which(CV_dev_five_n2==min(CV_dev_five_n2)) + 1
+cat ("The best k choosen according 5-folds and n2:", CV_five_n2_k)  
+
+
+# 10-folds selection model
+
+CV_dev_ten_n1 <- sim_func_CV(n1,M,k_max,10)  
+cat ("The deviances for 10-folds and n1:", CV_dev_ten_n1)
+CV_ten_n1_k = which(CV_dev_ten_n1==min(CV_dev_ten_n1)) + 1
+cat ("The best k choosen according 10-folds and n1:", CV_ten_n1_k)
+
+CV_dev_ten_n2 <- sim_func_CV(n2,M,k_max,10)  
+cat ("The deviances for 10-folds and n2:", CV_dev_ten_n2)
+CV_ten_n2_k = which(CV_dev_ten_n2==min(CV_dev_ten_n2)) + 1
+cat ("The best k choosen according 10-folds and n2:", CV_ten_n2_k)
+
+
+```
+
+```
+In k-fold cross-validation model selection simulation we have generate bart data for M simulations and we have split the data into 5 and 10 folds. We have trained the model with train data and we returned the optimized parameters by running handmade.em with train data then we have calculated the deviance with those parameters and test data. Finally, we took the average deviance for M simulations and we chose the best k which has the minimum deviance. As it is shown above almost all models returned k = k_max but for some simulations size and the number of iteration we have tried that is not shown here sometimes we got k close to k_max for smaller sapmle size n1 which makes sense.
+
+```
+
+
+Wasserstein Model Selection Simulation
+
+```{r, warning = FALSE}
+
+# Wasserstein  ------------------------------------------------------------
+
+
+sim_func_W <- function(n, k_max , M, ratio){
+  
+  dev_count <- c(0,0,0,0,0)
+  dev_tot <- c(0,0,0,0,0)
+  for (i in 1:M) {
+    
+    XX <- bart_func(n)
+    sample = sample.split(XX,SplitRatio = ratio) # splits the data in the ratio mentioned in SplitRatio. After splitting marks these rows as logical TRUE and the the remaining are marked as logical FALSE
+    train =subset(XX,sample ==TRUE) # creates a training dataset named train1 with rows which are marked as TRUE
+    test=subset(XX, sample==FALSE)
+    
+    dev_arr <- c(0,0,0,0,0)
+    for (i in 2:k_max) {
+      
+      k = i
+      p <- c()
+      mu <- c()
+      sigma <- c()
+      
+      for(j in 1:k){
+        
+        p_i = 1/k
+        p <- append(p,p_i)
+        
+        avg_mu <- mean(train)
+        num_mu <- runif(1, avg_mu-1, avg_mu+1)
+        mu <- append(mu,num_mu)
+        
+        a_sig = min(train)/2
+        b_sig = max(train)/2
+        num_sig <- runif(1, 0.0000001, abs(b_sig-a_sig))
+        sigma <- append(sigma,num_sig)
+      }
+      
+      hem_fit <- handmade.em(train,
+                             k,
+                             p,
+                             mu,
+                             sigma,
+                             n_iter = 50)
+      tr_param = round( hem_fit$parameters, 3 )
+      
+      for (i in 1:k) {
+        
+        p[i] = tr_param[i]
+        mu[i] = tr_param[k + i]
+        sigma[i] = tr_param[2*k + i]
+        
+      }
+      
+      Fx <- rnormmix(length(test), p, mu, sigma)
+      test_ecdf <- ecdf(test)
+      Fx_ecdf <- ecdf(Fx)
+      wass <- wasserstein1d(Fx, test)
+      
+      if (is.na(wass) | wass == 0){
+        
+        wass  = 0
+        dev_arr[i-1] = wass
+      }
+      else {
+        
+        dev_count[i-1] = dev_count[i-1] +1
+        dev_arr[i-1] = wass
+      }
+      
+    }
+    dev_tot = dev_tot + dev_arr
+  }
+  dev_avg = dev_tot/dev_count
+  
+  return(dev_avg)
+}
+
+
+Wass_avg_n1 <- sim_func_W(n1,k_max,M,0.50)
+cat ("The Wasserstein scores for n1:", Wass_avg_n1)
+Wass_avg_n1_k = which(Wass_avg_n1==min(Wass_avg_n1)) + 1
+cat ("The best k choosen according Wass-scores for n1:", Wass_avg_n1_k)
+
+
+Wass_avg_n2 <- sim_func_W(n2,k_max,M,0.50)
+cat ("The Wasserstein scores for n2:", Wass_avg_n2)
+Wass_avg_n2_k = which(Wass_avg_n2==min(Wass_avg_n2)) + 1
+cat ("The best k choosen according Wass-scores for n2:", Wass_avg_n2_k)
+
+
+```
+
+```
+In the Wasserstein model selection simulation as it has been requested we have splitted the data into two part as 50-50 for quantile function. The first part is the train part and the second part is the test part. We have found the optimum parameters by using handmade.em and we calculated the Wasserstein score with those parameters and test data.Finally, we took the average deviance for M simulations and we chose the best k which has the minimum Wass-Score. As it is shown above the best k is far from k_max for smaller sample size n1 but it is close to k_max for larger sample size n2 which makes sense.
+
+```
+
